@@ -1,0 +1,152 @@
+version: '3.8'
+
+services:
+
+  server:
+    image: searx/searx:latest
+    hostname: searx
+    networks:
+      - backend
+    volumes:
+      - searx-data:/etc/searx:rw
+    deploy:
+      mode: replicated
+      replicas: 6
+      restart_policy:
+        condition: any
+      update_config:
+        parallelism: 2
+        delay: 10s
+        order: stop-first
+        monitor: 10s
+      rollback_config:
+        parallelism: 2
+        delay: 10s
+        order: stop-first
+        monitor: 10s
+    command: -f
+    environment:
+      - BIND_ADDRESS=0.0.0.0:8080
+      - BASE_URL=https://${SEARX_HOSTNAME}/
+      - MORTY_URL=https://${SEARX_HOSTNAME}/morty/
+      - MORTY_KEY=${MORTY_KEY}
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+
+  morty:
+    image: dalf/morty:latest
+    hostname: morty
+    networks:
+      - backend
+      - traefik-public
+    deploy:
+      mode: replicated
+      replicas: 6
+      restart_policy:
+        condition: any
+      update_config:
+        parallelism: 2
+        delay: 10s
+        order: stop-first
+        monitor: 10s
+      rollback_config:
+        parallelism: 2
+        delay: 10s
+        order: stop-first
+        monitor: 10s
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+
+        # Access router
+        - "traefik.http.routers.searx-morty.rule=Host(`${SEARX_HOSTNAME}`) && PathPrefix(`/morty`)"
+        - "traefik.http.routers.searx-morty.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.searx-morty.entrypoints=websecure"
+        - "traefik.http.routers.searx-morty.middlewares=searx-morty-headers,searx-headers@docker"
+        - "traefik.http.routers.searx-morty.service=searx-morty-service"
+
+        # Headers
+        - "traefik.http.middlewares.searx-morty-headers.headers.framedeny=true"
+        - "traefik.http.middlewares.searx-morty-headers.headers.contentsecuritypolicy=default-src 'none'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'self'; base-uri 'self'; img-src 'self' data:; font-src 'self'; frame-src 'self'"
+
+        # Service
+        - "traefik.http.services.searx-morty-service.loadbalancer.server.port=3000"
+        - "traefik.http.services.searx-morty-service.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.searx-morty-service.loadbalancer.sticky.cookie.secure=true"
+    read_only: true
+    command: -timeout 6
+    environment:
+      - MORTY_KEY=${MORTY_KEY}
+      - MORTY_ADDRESS=0.0.0.0:3000
+    cap_drop:
+      - ALL
+
+  filtron:
+    image: dalf/filtron:latest
+    hostname: filtron
+    networks:
+      - backend
+      - traefik-public
+    configs:
+      - source: filtron-rules
+        target: /etc/filtron/rules.json
+    deploy:
+      mode: replicated
+      replicas: 6
+      restart_policy:
+        condition: any
+      update_config:
+        parallelism: 2
+        delay: 10s
+        order: stop-first
+        monitor: 10s
+      rollback_config:
+        parallelism: 2
+        delay: 10s
+        order: stop-first
+        monitor: 10s
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+
+        # Access router
+        - "traefik.http.routers.searx.rule=Host(`${SEARX_HOSTNAME}`)"
+        - "traefik.http.routers.searx.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.searx.entrypoints=websecure"
+        - "traefik.http.routers.searx.middlewares=searx-headers,searx-csp-headers"
+        - "traefik.http.routers.searx.service=searx-service"
+
+        # Global headers
+        - "traefik.http.middlewares.searx-headers.headers.framedeny=true"
+        - "traefik.http.middlewares.searx-headers.headers.featurePolicy=accelerometer 'none';ambient-light-sensor 'none'; autoplay 'none';camera 'none';encrypted-media 'none';focus-without-user-activation 'none'; geolocation 'none';gyroscope 'none';magnetometer 'none';microphone 'none';midi 'none';payment 'none';picture-in-picture 'none'; speaker 'none';sync-xhr 'none';usb 'none';vr 'none'"
+        - "traefik.http.middlewares.searx-headers.headers.referrerPolicy=no-referrer"
+
+        # CSP headers
+        - "traefik.http.middlewares.searx-csp-headers.headers.contentsecuritypolicy=upgrade-insecure-requests; default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'; font-src 'self'; frame-ancestors 'self'; base-uri 'self'; connect-src 'self' https://overpass-api.de; img-src 'self' data: https://*.tile.openstreetmap.org; frame-src https://www.youtube-nocookie.com https://player.vimeo.com https://www.dailymotion.com https://www.deezer.com https://www.mixcloud.com https://w.soundcloud.com https://embed.spotify.com"
+
+        # Service
+        - "traefik.http.services.searx-service.loadbalancer.server.port=4040"
+        - "traefik.http.services.searx-service.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.searx-service.loadbalancer.sticky.cookie.secure=true"
+    command:  -listen 0.0.0.0:4040 -api 0.0.0.0:4041 -target searx:8080
+    read_only: true
+    cap_drop:
+      - ALL
+
+configs:
+  filtron-rules:
+    file: ./rules.json 
+
+volumes:
+  searx-data:
+
+networks:
+  traefik-public:
+    external: true
+  backend:
+    driver: overlay
