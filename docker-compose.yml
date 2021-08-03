@@ -41,7 +41,7 @@ services:
       - SETUID
       - DAC_OVERRIDE
 
-      morty:
+  morty:
     image: dalf/morty:latest
     hostname: morty
     networks:
